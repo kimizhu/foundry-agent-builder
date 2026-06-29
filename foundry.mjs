@@ -451,37 +451,35 @@ export async function listProjects(subscriptionId) {
     }
 }
 
-// ─── Sign in / out (in-process device-code; no Azure CLI required) ────────────
-// Uses @azure/identity DeviceCodeCredential so the extension never shells out to
-// `az login`. The canvas shows the code + verification URL; once the user
-// completes it in a browser, the credential mints tokens for all data reads.
-// The signed-in credential is cached as the primary token source.
-const _signins = new Map(); // sessionId -> { cred, code, url, status, error, mode }
+// ─── Sign in / out (in-process interactive browser; no Azure CLI required) ────
+// Uses @azure/identity InteractiveBrowserCredential: opens the system browser
+// with a localhost redirect so the extension never shells out to `az login` and
+// never uses device code (blocked by many Conditional Access policies). Once the
+// user finishes in the browser, the credential is cached and mints tokens for
+// all data reads.
+const _signins = new Map(); // sessionId -> { cred, status, error, mode }
 
-// Start device-code sign-in. Returns { ok, sessionId, mode:"device", code, url }
-// so the canvas can show the code; sign-in completes in the background.
+// Start interactive-browser sign-in. Returns { ok, sessionId, mode:"interactive" };
+// the OS browser opens and sign-in completes in the background (poll status).
 export async function signInStart() {
     const sessionId = randomUUID();
-    let DeviceCodeCredential;
+    let InteractiveBrowserCredential;
     try {
-        ({ DeviceCodeCredential } = await import("@azure/identity"));
+        ({ InteractiveBrowserCredential } = await import("@azure/identity"));
     } catch (err) {
         return { ok: false, reason: "identity_missing", error: String(err?.message || err) };
     }
 
-    const rec = { cred: null, code: "", url: "", status: "pending", error: "", mode: "device" };
+    const rec = { cred: null, status: "pending", error: "", mode: "interactive" };
     _signins.set(sessionId, rec);
 
-    const cred = new DeviceCodeCredential({
-        userPromptCallback: (info) => {
-            rec.code = info.userCode;
-            rec.url = info.verificationUri || "https://microsoft.com/devicelogin";
-        },
+    const cred = new InteractiveBrowserCredential({
+        // Localhost redirect on an ephemeral port; opens the org-approved browser
+        // login (supports SSO / Conditional Access), no device code.
+        redirectUri: "http://localhost",
     });
     rec.cred = cred;
 
-    // Kick off token acquisition; the prompt callback fires almost immediately
-    // with the code, then this resolves once the user finishes in the browser.
     cred.getToken(MGMT_SCOPE)
         .then(() => {
             rec.status = "done";
@@ -496,15 +494,15 @@ export async function signInStart() {
             }
         });
 
-    // Brief wait so we can return the device code in the first response.
-    const deadline = Date.now() + 8_000;
-    while (Date.now() < deadline && !rec.code && rec.status === "pending") {
+    // Brief wait to catch an immediate launch failure.
+    const deadline = Date.now() + 2_500;
+    while (Date.now() < deadline && rec.status === "pending") {
         await new Promise((r) => setTimeout(r, 150));
     }
     if (rec.status === "error") {
         return { ok: false, sessionId, reason: "login_failed", error: rec.error };
     }
-    return { ok: true, sessionId, mode: "device", code: rec.code, url: rec.url || "https://microsoft.com/devicelogin" };
+    return { ok: true, sessionId, mode: "interactive" };
 }
 
 // Poll the status of an in-flight login.
