@@ -31,8 +31,8 @@ export const INSPECT_PROMPT = "start the Foundry agent locally so I can inspect 
 export const INIT_PROMPT =
     "Create a single-purpose Python hosted agent using the Responses protocol. Once it's done, run it locally to make sure it runs successfully.";
 
-// Currently selected Foundry project (mocked / hardcoded for now).
-export const project = { name: "jz-test" };
+// Currently selected Foundry project — empty until the user picks one.
+export const project = { name: "" };
 
 // ---------------------------------------------------------------------------
 // Tools
@@ -421,9 +421,8 @@ export const models = MODELS.map((m) => ({
     iconSrc: PROVIDER_ICONS[m.provider] || null,
 }));
 
-// Models already deployed in the selected Foundry project (mocked). Order is
-// preserved as listed here so the dropdown shows gpt-5.4 then gpt-5.5.
-const DEPLOYED_MODEL_IDS = ["gpt-5.4", "gpt-5.5"];
+// No mock model deployments — show nothing until a real project is signed into.
+const DEPLOYED_MODEL_IDS = [];
 export const deployments = DEPLOYED_MODEL_IDS.map((id) => MODELS.find((m) => m.id === id))
     .filter(Boolean)
     .map((m) => ({ ...m, prompt: selectModelPrompt(m.name), iconSrc: PROVIDER_ICONS[m.provider] || null }));

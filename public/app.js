@@ -5,9 +5,9 @@
 
 const state = {
     page: "build",
-    agentName: "mytestagent",
-    project: { name: "jz-test" },
-    model: { name: "gpt-5.4", color: "#10a37f" },
+    agentName: "",
+    project: { name: "" },
+    model: { name: "", color: "#10a37f" },
     deployPrompt: "deploy it as a Foundry hosted agent",
     inspectPrompt: "start the Foundry agent locally so I can inspect it",
     // Live project data, lazily loaded when a dropdown first opens.
@@ -105,9 +105,11 @@ function clone(id) {
 function renderBuild() {
     const node = clone("tpl-build");
 
-    const projectName = state.project?.name || "jz-test";
+    const projectName = state.project?.name || "Select a project";
     const projEl = node.querySelector("#projectName");
     if (projEl) projEl.textContent = projectName;
+    const projDot = node.querySelector(".project-dot");
+    if (projDot) projDot.classList.toggle("is-unset", !state.project?.name);
     const menuProj = node.querySelector("#menuProject");
     if (menuProj) menuProj.textContent = projectName;
     const toolMenuProj = node.querySelector("#toolMenuProject");

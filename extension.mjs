@@ -163,12 +163,12 @@ const servers = new Map(); // instanceId -> { server, url, state, sseClients:Set
 function defaultState() {
     return {
         page: "build",
-        agentName: "mytestagent",
+        agentName: "",
         project: { ...project },
         projectEndpoint: PROJECT_ENDPOINT,
         subscriptionId: "",
         bootstrapped: false,
-        model: { name: "gpt-5.4", color: "#10a37f" },
+        model: { name: "", color: "#10a37f" },
     };
 }
 
@@ -394,7 +394,7 @@ function createRequestHandler(instanceId) {
         if (method === "GET" && path === "/api/project") {
             const ep = (entry ? entry.state.projectEndpoint : null) || PROJECT_ENDPOINT;
             const p = getProject(ep);
-            const name = p.projectName || (entry ? entry.state.project?.name : project.name) || "jz-test";
+            const name = p.projectName || (entry ? entry.state.project?.name : project.name) || "";
             return sendJson(res, 200, { ok: true, name, endpoint: p.endpoint, resourceName: p.resourceName });
         }
 
