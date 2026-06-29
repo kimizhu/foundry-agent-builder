@@ -282,6 +282,8 @@ body {
 }
 .toolbox-picker .toolbox-icon { display: inline-flex; flex: 0 0 auto; color: var(--accent); }
 .toolbox-picker-label { padding: 4px 8px 6px; }
+/* Scroll the toolbox rows when there are many; label + "new toolbox" stay fixed. */
+.toolbox-picker-list { max-height: 300px; overflow-y: auto; }
 .toolbox-picker-plus {
     display: inline-flex; align-items: center; justify-content: center;
     width: 15px; flex: 0 0 auto; color: var(--accent); font-weight: 700;

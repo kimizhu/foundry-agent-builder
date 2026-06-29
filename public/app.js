@@ -1115,6 +1115,9 @@ async function openToolboxPicker(anchorBtn, toolItem) {
     label.textContent = `Add ${toolItem.name} to a toolbox`;
     head.appendChild(label);
 
+    // Scrollable container so a long toolbox list doesn't overflow the panel.
+    const list = document.createElement("div");
+    list.className = "toolbox-picker-list";
     for (const tb of toolboxes) {
         const row = document.createElement("button");
         row.className = "menu-item";
@@ -1136,8 +1139,9 @@ async function openToolboxPicker(anchorBtn, toolItem) {
             closeToolboxPicker();
             sendToChat(withProjectContext(addToolToToolboxPrompt(toolItem.name, tb.name)));
         });
-        head.appendChild(row);
+        list.appendChild(row);
     }
+    head.appendChild(list);
     menu.appendChild(head);
 
     // Always offer a "new toolbox" escape hatch.
