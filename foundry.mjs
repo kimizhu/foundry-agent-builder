@@ -298,6 +298,42 @@ export async function listToolboxes(endpoint) {
     }
 }
 
+// Tools configured in a single toolbox's default (or given) version. Read from
+// the toolbox version detail (no MCP/consent needed). Cached. Returns
+// { ok:true, data:[{ name, type }] } or { ok:false, reason }. Lazy — called when
+// a toolbox row is expanded, so opening the menu only does the cheap list call.
+export async function listToolboxTools(endpoint, name, version = "") {
+    if (!name) return { ok: false, reason: "no_toolbox" };
+    try {
+        const ver = version || "default";
+        const data = await cached(`tbxtools:${endpoint}:${name}:${ver}`, async () => {
+            const token = await getToken();
+            const base = `${normalizeEndpoint(endpoint)}/toolboxes/${encodeURIComponent(name)}`;
+            const url = version
+                ? `${base}/versions/${encodeURIComponent(version)}?api-version=v1`
+                : `${base}?api-version=v1`;
+            const res = await fetch(url, {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    Accept: "application/json",
+                    "Foundry-Features": "Toolboxes=V1Preview",
+                },
+            });
+            if (!res.ok) {
+                const err = new Error(`HTTP ${res.status}`);
+                err.status = res.status;
+                throw err;
+            }
+            const j = await res.json();
+            const tools = j?.tools || j?.version?.tools || [];
+            return tools.map((t) => ({ name: t.name || t.server_label || t.type, type: t.type || "" }));
+        });
+        return { ok: true, data };
+    } catch (err) {
+        return { ok: false, reason: reasonFor(err) };
+    }
+}
+
 // Derive project identity from the endpoint URL (cheap, no network).
 // e.g. https://<resource>.services.ai.azure.com/api/projects/<project>
 export function getProject(endpoint) {

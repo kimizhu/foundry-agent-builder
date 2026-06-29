@@ -355,12 +355,23 @@ function renderToolboxList() {
     if (st.status === "ready" && st.items.length === 0) return host.appendChild(menuMsg("No toolboxes in this project", "empty"));
 
     for (const t of st.items) {
+        const wrap = document.createElement("div");
+        wrap.className = "toolbox-wrap";
+
+        // Header row: chevron + icon + name; the whole row toggles the tools.
         const item = document.createElement("button");
         item.className = "menu-item menu-item--toolbox";
         item.type = "button";
         item.setAttribute("role", "menuitem");
+        item.setAttribute("aria-expanded", String(!!t.expanded));
 
-        // Stacked-box glyph marks this row as a toolbox (a bundle of tools).
+        const chev = document.createElement("span");
+        chev.className = "toolbox-chev" + (t.expanded ? " is-open" : "");
+        chev.setAttribute("aria-hidden", "true");
+        chev.innerHTML =
+            '<svg viewBox="0 0 24 24" width="12" height="12"><path fill="currentColor" d="M9 6 7.6 7.4 12.2 12l-4.6 4.6L9 18l6-6-6-6Z"/></svg>';
+        item.appendChild(chev);
+
         const icon = document.createElement("span");
         icon.className = "toolbox-icon";
         icon.setAttribute("aria-hidden", "true");
@@ -374,12 +385,61 @@ function renderToolboxList() {
         name.textContent = t.name;
         item.appendChild(name);
 
-        item.addEventListener("click", () => {
+        // "Use" selects the toolbox (prompt-to-chat); clicking elsewhere expands.
+        const use = document.createElement("span");
+        use.className = "toolbox-use";
+        use.textContent = "Use";
+        use.addEventListener("click", (e) => {
+            e.stopPropagation();
             closeToolMenu();
             sendToChat(withProjectContext(t.prompt));
         });
-        host.appendChild(item);
+        item.appendChild(use);
+
+        item.addEventListener("click", () => {
+            t.expanded = !t.expanded;
+            if (t.expanded) loadToolboxTools(t);
+            renderToolboxList();
+        });
+        wrap.appendChild(item);
+
+        if (t.expanded) {
+            const tools = document.createElement("div");
+            tools.className = "toolbox-tools";
+            if (t.toolsStatus === "loading") {
+                tools.appendChild(menuMsg("Loading tools\u2026", "loading"));
+            } else if (t.toolsStatus === "error") {
+                tools.appendChild(menuMsg("Couldn\u2019t load tools", "empty"));
+            } else if ((t.tools || []).length === 0) {
+                tools.appendChild(menuMsg("No tools in this toolbox", "empty"));
+            } else {
+                for (const tool of t.tools) {
+                    const row = document.createElement("div");
+                    row.className = "toolbox-tool";
+                    row.textContent = tool.name + (tool.type ? `  \u00b7 ${tool.type}` : "");
+                    tools.appendChild(row);
+                }
+            }
+            wrap.appendChild(tools);
+        }
+        host.appendChild(wrap);
     }
+}
+
+// Lazily fetch a toolbox's tools the first time it's expanded; cached per row.
+async function loadToolboxTools(t) {
+    if (t.toolsStatus === "ready" || t.toolsStatus === "loading") return;
+    t.toolsStatus = "loading";
+    renderToolboxList();
+    try {
+        const qs = "name=" + encodeURIComponent(t.name) + (t.version ? "&version=" + encodeURIComponent(t.version) : "");
+        const data = await getJSON("/api/toolbox/tools?" + qs);
+        t.tools = Array.isArray(data.items) ? data.items : [];
+        t.toolsStatus = data.ok ? "ready" : "error";
+    } catch {
+        t.toolsStatus = "error";
+    }
+    renderToolboxList();
 }
 async function loadDeployments(force) {
     const st = state.deploymentsState;

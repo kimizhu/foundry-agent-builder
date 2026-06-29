@@ -275,6 +275,17 @@ body {
 .menu-item .item-check { color: var(--accent); font-weight: 700; }
 /* Toolbox rows: distinct stacked-box icon so they read differently from single tools. */
 .menu-item--toolbox .toolbox-icon { display: inline-flex; flex: 0 0 auto; color: var(--accent); }
+/* Expandable toolbox rows: chevron, inline "Use", nested tool lines. */
+.toolbox-chev { display: inline-flex; flex: 0 0 auto; color: var(--muted); transition: transform .12s; }
+.toolbox-chev.is-open { transform: rotate(90deg); }
+.toolbox-use {
+    flex: 0 0 auto; font-size: 11px; font-weight: 600; color: var(--accent);
+    border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; opacity: 0;
+}
+.menu-item--toolbox:hover .toolbox-use { opacity: 1; }
+.toolbox-use:hover { background: var(--bg-subtle); }
+.toolbox-tools { margin: 2px 0 6px 30px; display: flex; flex-direction: column; gap: 1px; }
+.toolbox-tool { font-size: 12px; color: var(--muted); padding: 4px 8px; border-radius: 6px; }
 /* "Add tool" → toolbox picker popover anchored to the card's action button. */
 .toolbox-picker {
     position: absolute; top: calc(100% + 6px); right: 0; z-index: 30;

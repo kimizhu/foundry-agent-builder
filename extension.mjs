@@ -30,7 +30,7 @@ import {
     providerColor,
     toolIconFor,
 } from "./catalog.mjs";
-import { listDeployments, listConnections, listToolboxes, getProject } from "./foundry.mjs";
+import { listDeployments, listConnections, listToolboxes, listToolboxTools, getProject } from "./foundry.mjs";
 import {
     getIdentity,
     getDefaultSubscriptionId,
@@ -427,6 +427,16 @@ function createRequestHandler(instanceId) {
             if (r.ok) {
                 return sendJson(res, 200, { ok: true, items: r.data.map(enrichToolbox) });
             }
+            return sendJson(res, 200, { ok: false, reason: r.reason, items: [] });
+        }
+
+        // Tools inside a single toolbox (lazy — fetched when a row is expanded).
+        if (method === "GET" && path === "/api/toolbox/tools") {
+            const ep = (entry ? entry.state.projectEndpoint : null) || PROJECT_ENDPOINT;
+            const name = url.searchParams.get("name") || "";
+            const version = url.searchParams.get("version") || "";
+            const r = await listToolboxTools(ep, name, version);
+            if (r.ok) return sendJson(res, 200, { ok: true, items: r.data });
             return sendJson(res, 200, { ok: false, reason: r.reason, items: [] });
         }
 
