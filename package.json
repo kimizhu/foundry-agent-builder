@@ -1,0 +1,11 @@
+{
+    "name": "foundry-agent-builder",
+    "version": "1.0.0",
+    "private": true,
+    "type": "module",
+    "description": "Canvas extension reproducing the Microsoft Foundry Build agent UI, with live project model deployments and tool connections.",
+    "dependencies": {
+        "@azure/identity": "^4.5.0",
+        "ws": "^8.21.0"
+    }
+}
