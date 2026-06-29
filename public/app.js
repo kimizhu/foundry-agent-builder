@@ -396,7 +396,11 @@ function renderToolboxList() {
         });
         item.appendChild(use);
 
-        item.addEventListener("click", () => {
+        item.addEventListener("click", (e) => {
+            // Stop the document-level outside-click handler: re-rendering below
+            // detaches this row, so its closest(".tool-select") would be null
+            // and the menu would wrongly close.
+            e.stopPropagation();
             t.expanded = !t.expanded;
             if (t.expanded) loadToolboxTools(t);
             renderToolboxList();
