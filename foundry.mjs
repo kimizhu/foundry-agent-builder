@@ -1,17 +1,16 @@
 // foundry.mjs — read-only live backend for the Foundry Agent Builder canvas.
 //
 // Pulls the *selected project's* real model deployments and tool connections
-// from the Microsoft Foundry data-plane REST API. Auth follows the robust
-// pattern from the sibling GHCP-Extension-Inspector canvas:
-//   1) @azure/identity DefaultAzureCredential (works even when az/azd aren't on
-//      PATH — e.g. GUI-launched extension hosts),
-//   2) fall back to `az account get-access-token`, then `azd auth token`.
+// from the Microsoft Foundry data-plane REST API. Auth is in-process via
+// @azure/identity (no Azure CLI required): sign-in uses DeviceCodeCredential and
+// the resulting credential mints tokens. If az/azd happen to be present and
+// already signed in, they're used as a best-effort fallback only.
 //
 // Everything here is READ-only. Mutations (deploy / add model / connect tool)
 // stay in the prompt-to-chat flow so the chat agent + microsoft-foundry skill
 // handle them properly.
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -329,10 +328,25 @@ function decodeJwt(token) {
     }
 }
 
-// Signed-in identity. Prefer `az account show` (so sign-out is reflected), fall
-// back to decoding a DefaultAzureCredential token. Returns
-// { signedIn, account, tenantId, subscriptionId, subscriptionName }.
+// Signed-in identity. Derived from the cached credential's token (works without
+// the Azure CLI). Returns { signedIn, account, tenantId, subscriptionId,
+// subscriptionName }. Falls back to az/azd only if those happen to be present.
 export async function getIdentity() {
+    // Primary path: decode a token from the cached/default credential.
+    const tok = (await tokenFromIdentity(MGMT_SCOPE))?.token;
+    if (tok) {
+        const p = decodeJwt(tok);
+        if (p) {
+            return {
+                signedIn: true,
+                account: p.upn || p.preferred_username || p.unique_name || p.email || "",
+                tenantId: p.tid || "",
+                subscriptionId: "",
+                subscriptionName: "",
+            };
+        }
+    }
+    // Best-effort fallback: an existing az session (no requirement on az).
     const r = runCli("az", ["account", "show", "-o", "json"]);
     if (r.status === 0 && r.stdout) {
         try {
@@ -348,24 +362,10 @@ export async function getIdentity() {
             /* fall through */
         }
     }
-    // Fallback: a credential may still mint tokens even without an az session.
-    const tok = (await tokenFromIdentity(MGMT_SCOPE))?.token;
-    if (tok) {
-        const p = decodeJwt(tok);
-        if (p) {
-            return {
-                signedIn: true,
-                account: p.upn || p.preferred_username || p.unique_name || p.email || "",
-                tenantId: p.tid || "",
-                subscriptionId: "",
-                subscriptionName: "",
-            };
-        }
-    }
     return { signedIn: false, account: "", tenantId: "", subscriptionId: "", subscriptionName: "" };
 }
 
-// Default subscription id from the az CLI session.
+// Default subscription id: first enabled subscription from ARM (no az needed).
 export function getDefaultSubscriptionId() {
     const r = runCli("az", ["account", "show", "--query", "id", "-o", "tsv"]);
     if (r.status === 0 && r.stdout) return r.stdout.trim();
@@ -451,76 +451,60 @@ export async function listProjects(subscriptionId) {
     }
 }
 
-// ─── Sign in / out (interactive Azure CLI login shown in the canvas) ──────────
-// Uses the default `az login` experience: on Windows that's the Web Account
-// Manager (WAM) native account picker; on macOS/Linux it's a browser-based
-// login. We avoid device code (--use-device-code) because Conditional Access
-// commonly blocks it at Microsoft. If az falls back to a device code anyway, we
-// surface that code/URL so the user can still complete sign-in.
-const _signins = new Map(); // sessionId -> { child, code, url, status, error, mode }
+// ─── Sign in / out (in-process device-code; no Azure CLI required) ────────────
+// Uses @azure/identity DeviceCodeCredential so the extension never shells out to
+// `az login`. The canvas shows the code + verification URL; once the user
+// completes it in a browser, the credential mints tokens for all data reads.
+// The signed-in credential is cached as the primary token source.
+const _signins = new Map(); // sessionId -> { cred, code, url, status, error, mode }
 
-const DEVICE_CODE_RE = /code\s+([A-Z0-9]{6,})\s+to authenticate/i;
-const DEVICE_URL_RE = /(https?:\/\/\S*devicelogin\S*|https?:\/\/microsoft\.com\/devicelogin)/i;
-
-// Start interactive `az login`. The OS account picker / browser opens; we resolve
-// once the process exits. Returns { ok, sessionId, mode } (mode "interactive"),
-// or { ok, sessionId, mode:"device", code, url } if az fell back to device code.
+// Start device-code sign-in. Returns { ok, sessionId, mode:"device", code, url }
+// so the canvas can show the code; sign-in completes in the background.
 export async function signInStart() {
     const sessionId = randomUUID();
-    let child;
+    let DeviceCodeCredential;
     try {
-        child = spawn(quoteExe(which("az")), ["login", "--allow-no-subscriptions", "--only-show-errors"], {
-            shell: IS_WINDOWS,
-            windowsHide: true,
-        });
+        ({ DeviceCodeCredential } = await import("@azure/identity"));
     } catch (err) {
-        return { ok: false, reason: "spawn_failed", error: String(err?.message || err) };
+        return { ok: false, reason: "identity_missing", error: String(err?.message || err) };
     }
 
-    const rec = { child, code: "", url: "", status: "pending", error: "", mode: "interactive" };
+    const rec = { cred: null, code: "", url: "", status: "pending", error: "", mode: "device" };
     _signins.set(sessionId, rec);
 
-    let errBuf = "";
-    const onData = (buf) => {
-        const text = String(buf);
-        errBuf = (errBuf + text).slice(-2000);
-        const c = text.match(DEVICE_CODE_RE);
-        const u = text.match(DEVICE_URL_RE);
-        if (c && !rec.code) {
-            rec.code = c[1];
-            rec.mode = "device";
-        }
-        if (u && !rec.url) rec.url = u[1];
-    };
-    child.stdout?.on("data", onData);
-    child.stderr?.on("data", onData);
-    child.on("exit", (codeNum) => {
-        rec.exited = true;
-        if (codeNum === 0) {
-            rec.status = "done";
-            resetAuthCaches();
-        } else if (rec.status !== "done") {
-            rec.status = rec.cancelled ? "cancelled" : "error";
-            rec.error = rec.error || errBuf.trim().slice(0, 400);
-        }
+    const cred = new DeviceCodeCredential({
+        userPromptCallback: (info) => {
+            rec.code = info.userCode;
+            rec.url = info.verificationUri || "https://microsoft.com/devicelogin";
+        },
     });
-    child.on("error", (err) => {
-        rec.status = "error";
-        rec.error = String(err?.message || err);
-    });
+    rec.cred = cred;
 
-    // Brief wait: catch an immediate spawn failure, or a device-code fallback.
-    const deadline = Date.now() + 4_000;
-    while (Date.now() < deadline && rec.status === "pending" && !rec.code) {
-        await new Promise((r) => setTimeout(r, 200));
+    // Kick off token acquisition; the prompt callback fires almost immediately
+    // with the code, then this resolves once the user finishes in the browser.
+    cred.getToken(MGMT_SCOPE)
+        .then(() => {
+            rec.status = "done";
+            _cred = cred; // promote to the primary credential for all reads
+            _tokenCache.clear();
+            _cache.clear();
+        })
+        .catch((err) => {
+            if (rec.status !== "done") {
+                rec.status = rec.cancelled ? "cancelled" : "error";
+                rec.error = String(err?.message || err).slice(0, 400);
+            }
+        });
+
+    // Brief wait so we can return the device code in the first response.
+    const deadline = Date.now() + 8_000;
+    while (Date.now() < deadline && !rec.code && rec.status === "pending") {
+        await new Promise((r) => setTimeout(r, 150));
     }
-    if (rec.status === "error" || (rec.exited && rec.status !== "done")) {
-        return { ok: false, sessionId, reason: "login_failed", error: rec.error || errBuf.trim().slice(0, 400) };
+    if (rec.status === "error") {
+        return { ok: false, sessionId, reason: "login_failed", error: rec.error };
     }
-    if (rec.code) {
-        return { ok: true, sessionId, mode: "device", code: rec.code, url: rec.url || "https://microsoft.com/devicelogin" };
-    }
-    return { ok: true, sessionId, mode: "interactive" };
+    return { ok: true, sessionId, mode: "device", code: rec.code, url: rec.url || "https://microsoft.com/devicelogin" };
 }
 
 // Poll the status of an in-flight login.
@@ -541,48 +525,16 @@ export async function signInStatus(sessionId) {
     return { ok: true, status: "pending", mode: rec.mode, code: rec.code, url: rec.url };
 }
 
-// Kill a spawned process and its descendants. With shell:true on Windows the
-// direct child is cmd.exe; the real `az`/python grandchild must be killed via
-// the process tree, otherwise the device-code login keeps running.
-function killTree(child) {
-    if (!child || child.exitCode !== null) {
-        try {
-            child?.kill();
-        } catch {
-            /* ignore */
-        }
-        return;
-    }
-    if (IS_WINDOWS && child.pid) {
-        try {
-            spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true });
-            return;
-        } catch {
-            /* fall through to plain kill */
-        }
-    }
-    try {
-        child.kill();
-    } catch {
-        /* ignore */
-    }
-}
-
-// Cancel an in-flight device-code login (no real logout).
+// Cancel an in-flight device-code login.
 export function signInCancel(sessionId) {
     const rec = _signins.get(sessionId);
-    if (rec?.child && !rec.exited) {
-        rec.cancelled = true;
-        killTree(rec.child);
-    }
+    if (rec) rec.cancelled = true;
     _signins.delete(sessionId);
     return { ok: true };
 }
 
-// Sign out of the Azure CLI session and clear cached credentials/tokens.
+// Sign out: drop the cached credential/tokens so identity is forgotten.
 export async function signOut() {
-    runCli("az", ["logout"]);
-    runCli("azd", ["auth", "logout"]); // best-effort
     resetAuthCaches();
     return { ok: true };
 }

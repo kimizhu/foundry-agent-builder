@@ -677,7 +677,11 @@ async function startSignIn() {
     try {
         const r = await postJSON("/api/signin", {});
         if (!r.ok || !r.sessionId) {
-            renderDevice({ kind: "error", message: "Couldn\u2019t start sign-in. Is the Azure CLI installed?" });
+            const msg =
+                r.reason === "identity_missing"
+                    ? "Sign-in unavailable: the @azure/identity package is missing. Run npm install."
+                    : "Couldn\u2019t start sign-in. Please try again.";
+            renderDevice({ kind: "error", message: msg });
             state.signin.starting = false;
             if (authBtn) authBtn.disabled = false;
             return;
